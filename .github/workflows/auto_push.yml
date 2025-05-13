@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
     if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id || github.actor == 'Google'
 
     steps:
