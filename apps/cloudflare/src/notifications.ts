@@ -105,16 +105,23 @@ export async function sendSMTPNotification(
       await writeCommand('DATA\r\n')
       await readResponse()
 
+      // 用于处理 UTF-8 字符的 base64 编码
+      function utf8ToBase64(str: string): string {
+        const bytes = new TextEncoder().encode(str)
+        const binString = Array.from(bytes, (byte) => String.fromCodePoint(byte)).join('')
+        return btoa(binString)
+      }
+
       // 构建邮件内容
       const emailContent = [
         `From: ${smtpConfig.from}`,
         `To: ${smtpConfig.to}`,
-        `Subject: =?UTF-8?B?${btoa(title)}?=`,
+        `Subject: =?UTF-8?B?${utf8ToBase64(title)}?=`,
         'MIME-Version: 1.0',
         'Content-Type: text/html; charset=UTF-8',
         'Content-Transfer-Encoding: base64',
         '',
-        btoa(createEmailHTML(title, content)),
+        utf8ToBase64(createEmailHTML(title, content)),
         '\r\n.\r\n'
       ].join('\r\n')
 
