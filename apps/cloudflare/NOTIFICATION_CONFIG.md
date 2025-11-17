@@ -48,22 +48,22 @@ EMAIL_TO=
 
 ### 3. 钉钉机器人通知
 ```
-DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxxxxx
+DINGTALK_WEBHOOK=
 ```
 
 ### 4. 企业微信机器人通知
 ```
-WECHAT_WORK_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxx
+WECHAT_WORK_WEBHOOK=
 ```
 
 ### 5. Slack 通知
 ```
-SLACK_WEBHOOK=https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
+SLACK_WEBHOOK=
 ```
 
 ### 6. 通用 Webhook 通知
 ```
-WEBHOOK_URL=https://your-api.example.com/webhook
+WEBHOOK_URL=
 ```
 
 ## 通知内容格式
