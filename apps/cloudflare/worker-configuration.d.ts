@@ -5,6 +5,25 @@ declare namespace Cloudflare {
 	interface Env {
 		SKLAND_DAILY_ATTENDANCE_STORAGE: KVNamespace;
 		SKLAND_TOKEN: string;
+		
+		// 通知相关环境变量
+		SERVERCHAN_SENDKEY?: string;          // ServerChan 推送
+		
+		// SMTP 邮件配置
+		SMTP_HOST?: string;                   // SMTP 服务器地址
+		SMTP_PORT?: string;                   // SMTP 端口 (25, 465, 587, 2525)
+		SMTP_SECURE?: string;                 // 是否使用 SSL (true/false)
+		SMTP_TLS?: string;                    // 是否启用 TLS (true/false)
+		SMTP_USER?: string;                   // SMTP 用户名
+		SMTP_PASS?: string;                   // SMTP 密码或 API Key
+		EMAIL_FROM?: string;                  // 发件人邮箱
+		EMAIL_TO?: string;                    // 收件人邮箱
+		
+		// Webhook 通知
+		WEBHOOK_URL?: string;                 // 通用 Webhook URL
+		DINGTALK_WEBHOOK?: string;            // 钉钉机器人 Webhook
+		WECHAT_WORK_WEBHOOK?: string;         // 企业微信机器人 Webhook
+		SLACK_WEBHOOK?: string;               // Slack Webhook
 	}
 }
 interface Env extends Cloudflare.Env {}

@@ -2,11 +2,20 @@ import type { BindingUserItem } from '@skland-x/core'
 import type { Storage } from 'unstorage'
 import { TZDate } from '@date-fns/tz'
 import { attendance, auth, getBinding, signIn } from '@skland-x/core'
+import { serverChan } from '@skland-x/notification'
 import { format, sub } from 'date-fns'
 import { defu } from 'defu'
 import { createStorage } from 'unstorage'
 import cloudflareKVBindingDriver from 'unstorage/drivers/cloudflare-kv-binding'
 import { context, DEFULAT_CONFIG, useContext } from './context'
+import { 
+  sendSMTPNotification,
+  type SMTPConfig,
+  sendWebhookNotification, 
+  sendDingTalkNotification, 
+  sendWeChatWorkNotification,
+  sendSlackNotification 
+} from './notifications'
 import { pick, retry } from './utils'
 
 function formatCharacterName(character: BindingUserItem) {
@@ -27,6 +36,98 @@ function formatPrivacyName(nickName: string) {
   const stars = '*'.repeat(name.length - 2)
 
   return `${firstChar}${stars}${lastChar}#${number}`
+}
+
+// 通知管理器
+class NotificationManager {
+  private messages: string[] = []
+  private hasError = false
+
+  constructor(private env: Env) {}
+
+  log(message: string, isError = false) {
+    this.messages.push(message)
+    console[isError ? 'error' : 'log'](message)
+    if (isError) {
+      this.hasError = true
+    }
+  }
+
+  async sendNotifications() {
+    const title = '【森空岛每日签到】'
+    const content = this.messages.join('\n\n')
+    const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+    
+    console.log('\n开始发送通知...')
+
+    try {
+      // ServerChan 通知
+      if (this.env.SERVERCHAN_SENDKEY) {
+        await serverChan(this.env.SERVERCHAN_SENDKEY, title, content)
+      }
+
+      // SMTP 邮件通知
+      if (this.env.SMTP_HOST && this.env.SMTP_USER && this.env.SMTP_PASS && this.env.EMAIL_TO) {
+        const smtpConfig: SMTPConfig = {
+          host: this.env.SMTP_HOST,
+          port: parseInt(this.env.SMTP_PORT || '587'),
+          secure: this.env.SMTP_SECURE === 'true',
+          tls: this.env.SMTP_TLS !== 'false', // 默认启用 TLS
+          user: this.env.SMTP_USER,
+          pass: this.env.SMTP_PASS,
+          from: this.env.EMAIL_FROM || this.env.SMTP_USER,
+          to: this.env.EMAIL_TO
+        }
+        
+        await sendSMTPNotification(smtpConfig, title, content)
+      }
+
+      // 通用 Webhook 通知
+      if (this.env.WEBHOOK_URL) {
+        await sendWebhookNotification(
+          this.env.WEBHOOK_URL,
+          title,
+          content,
+          'json'
+        )
+      }
+
+      // 钉钉机器人通知
+      if (this.env.DINGTALK_WEBHOOK) {
+        await sendDingTalkNotification(
+          this.env.DINGTALK_WEBHOOK,
+          title,
+          content
+        )
+      }
+
+      // 企业微信机器人通知
+      if (this.env.WECHAT_WORK_WEBHOOK) {
+        await sendWeChatWorkNotification(
+          this.env.WECHAT_WORK_WEBHOOK,
+          title,
+          content
+        )
+      }
+
+      // Slack 通知
+      if (this.env.SLACK_WEBHOOK) {
+        await sendSlackNotification(
+          this.env.SLACK_WEBHOOK,
+          title,
+          content
+        )
+      }
+
+      console.log('通知发送完成')
+    } catch (error) {
+      console.error('发送通知时出错:', error)
+    }
+  }
+
+  hasErrors() {
+    return this.hasError
+  }
 }
 
 async function cleanOutdatedData() {
@@ -69,13 +170,15 @@ async function handleAttendanceError(error: any, character: BindingUserItem, sto
 }
 
 // 签到单个角色
-async function attendSingleCharacter(character: BindingUserItem, cred: string, signToken: string) {
+async function attendSingleCharacter(character: BindingUserItem, cred: string, signToken: string, notificationManager: NotificationManager) {
   const { config, storage, today } = useContext()
   const key = `${config.ATTENDANCE_STORAGE_PREFIX}${format(today, 'yyyy-MM-dd')}:${character.uid}`
   const isAttended = await storage.getItem(key)
 
   if (isAttended) {
-    console.log(`${formatCharacterName(character)}今天已经签到过了`)
+    const msg = `${formatCharacterName(character)}今天已经签到过了`
+    console.log(msg)
+    notificationManager.log(msg)
     return true
   }
 
@@ -87,7 +190,9 @@ async function attendSingleCharacter(character: BindingUserItem, cred: string, s
       })
 
       if (!data) {
-        console.log(`${formatCharacterName(character)}今天已经签到过了`)
+        const msg = `${formatCharacterName(character)}今天已经签到过了`
+        console.log(msg)
+        notificationManager.log(msg)
         await storage.setItem(key, true)
         return true
       }
@@ -96,17 +201,25 @@ async function attendSingleCharacter(character: BindingUserItem, cred: string, s
         const awards = data.data.awards.map(a => `「${a.resource.name}」${a.count}个`).join(',')
         const msg = `${formatCharacterName(character)}签到成功${awards ? `, 获得了${awards}` : ''}`
         console.log(msg)
+        notificationManager.log(msg)
         await storage.setItem(key, true)
         return true
       }
 
       const msg = `${formatCharacterName(character)}签到失败, 错误消息: ${data.message}`
       console.error(msg)
+      notificationManager.log(msg, true)
       console.error('详细错误信息:', JSON.stringify(data, null, 2))
       return false
     }
     catch (error: any) {
-      return handleAttendanceError(error, character, storage, key)
+      const success = await handleAttendanceError(error, character, storage, key)
+      if (!success) {
+        notificationManager.log(`${formatCharacterName(character)}签到过程中出现错误: ${error.message}`, true)
+      } else {
+        notificationManager.log(`${formatCharacterName(character)}今天已经签到过了`)
+      }
+      return success
     }
   })
 }
@@ -183,17 +296,25 @@ export default {
       today: new TZDate().withTimeZone('Asia/Shanghai'),
     })
 
+    // 创建通知管理器
+    const notificationManager = new NotificationManager(env)
+
     const tokens = env.SKLAND_TOKEN.split(',')
     console.log(`开始执行签到任务，共 ${tokens.length} 个账号`)
+    notificationManager.log(`## 明日方舟签到\n\n开始执行签到任务，共 ${tokens.length} 个账号`)
+
+    let totalSuccess = 0
 
     for (const [index, token] of tokens.entries()) {
       console.log(`\n开始处理第 ${index + 1}/${tokens.length} 个账号`)
+      notificationManager.log(`\n### 账号 ${index + 1}/${tokens.length}`)
 
       try {
         const { cred, signToken, userId } = await retry(() => authorizeSklandAccount(token))
 
         if (await checkUserBindingsAllAttended(userId)) {
           console.log(`账号 ${index + 1} 的所有角色已经签到完成，跳过`)
+          notificationManager.log(`账号 ${index + 1} 的所有角色已经签到完成，跳过`)
           continue
         }
 
@@ -204,6 +325,7 @@ export default {
         )
 
         console.log(`账号 ${index + 1} 共有 ${characterList.length} 个角色需要签到`)
+        notificationManager.log(`账号 ${index + 1} 共有 ${characterList.length} 个角色需要签到`)
 
         // 使用 chunk 控制并发
         const chunks = []
@@ -216,9 +338,11 @@ export default {
             console.log(`处理第 ${chunkIndex + 1}/${chunks.length} 批角色`)
           }
 
-          await Promise.all(chunk.map(character =>
-            attendSingleCharacter(character, cred, signToken),
+          const results = await Promise.all(chunk.map(character =>
+            attendSingleCharacter(character, cred, signToken, notificationManager)
           ))
+
+          totalSuccess += results.filter(Boolean).length
 
           if (chunkIndex < chunks.length - 1) {
             console.log(`等待 ${config.CHUNK_DELAY}ms 后处理下一批角色`)
@@ -227,12 +351,21 @@ export default {
         }
       }
       catch (error) {
-        console.error(`处理账号 ${index + 1} 时发生错误:`, error instanceof Error ? error.message : error)
+        const errorMsg = `处理账号 ${index + 1} 时发生错误: ${error instanceof Error ? error.message : error}`
+        console.error(errorMsg)
+        notificationManager.log(errorMsg, true)
         continue
       }
     }
 
     await cleanOutdatedData()
+    
+    // 添加汇总信息
+    notificationManager.log(`\n### 签到汇总\n总共成功签到 ${totalSuccess} 个角色`)
+    
+    // 发送通知
+    await notificationManager.sendNotifications()
+    
     context.unset()
     console.log('签到任务完成')
   },
