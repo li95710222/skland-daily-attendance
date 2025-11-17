@@ -10,7 +10,7 @@ export interface SMTPConfig {
   tls?: boolean        // 是否启用 STARTTLS (port 587 通常为 true)
 }
 
-// 通用 SMTP 邮件发送功能 (通过 HTTP 代理)
+// 通用 SMTP 邮件发送功能 (使用 Cloudflare Workers TCP Socket API)
 export async function sendSMTPNotification(
   smtpConfig: SMTPConfig,
   title: string,
@@ -19,39 +19,119 @@ export async function sendSMTPNotification(
   try {
     console.log(`[SMTP] 开始发送邮件到 ${smtpConfig.to}`)
     
-    // 通过你现有的邮箱服务器发送邮件
-    // 这里需要你提供一个 HTTP-to-SMTP 代理服务的端点
-    const response = await fetch(`https://${smtpConfig.host}/api/send-mail`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${smtpConfig.pass}` // 或其他认证方式
-      },
-      body: JSON.stringify({
-        smtp: {
-          host: smtpConfig.host,
-          port: smtpConfig.port,
-          secure: smtpConfig.secure,
-          user: smtpConfig.user,
-          pass: smtpConfig.pass,
-          tls: smtpConfig.tls
-        },
-        email: {
-          from: smtpConfig.from,
-          to: smtpConfig.to,
-          subject: title,
-          html: createEmailHTML(title, content),
-          text: content // 纯文本版本
-        }
-      })
+    // 导入 Cloudflare Workers TCP Socket API
+    const { connect } = await import('cloudflare:sockets')
+    
+    // 创建 TCP 连接
+    const socket = connect({
+      hostname: smtpConfig.host,
+      port: smtpConfig.port
+    }, {
+      secureTransport: smtpConfig.secure ? 'on' : (smtpConfig.tls ? 'starttls' : 'off'),
+      allowHalfOpen: false
     })
 
-    if (!response.ok) {
-      const error = await response.text()
-      throw new Error(`SMTP 发送失败: ${error}`)
+    const writer = socket.writable.getWriter()
+    const reader = socket.readable.getReader()
+    const encoder = new TextEncoder()
+    const decoder = new TextDecoder()
+
+    // SMTP 通信函数
+    async function writeCommand(command: string) {
+      console.log(`[SMTP] 发送: ${command.trim()}`)
+      await writer.write(encoder.encode(command))
     }
-    
-    console.log('[SMTP] 邮件发送成功')
+
+    async function readResponse(): Promise<string> {
+      const { value } = await reader.read()
+      const response = decoder.decode(value)
+      console.log(`[SMTP] 接收: ${response.trim()}`)
+      return response
+    }
+
+    try {
+      // 等待服务器欢迎消息
+      await readResponse()
+
+      // EHLO 命令
+      await writeCommand(`EHLO ${smtpConfig.host}\r\n`)
+      await readResponse()
+
+      // 如果需要 StartTLS
+      if (smtpConfig.tls && !smtpConfig.secure) {
+        await writeCommand('STARTTLS\r\n')
+        await readResponse()
+        // 升级到 TLS
+        const tlsSocket = socket.startTls()
+        // 重新获取 writer 和 reader
+        const tlsWriter = tlsSocket.writable.getWriter()
+        const tlsReader = tlsSocket.readable.getReader()
+        
+        // 重新 EHLO
+        await tlsWriter.write(encoder.encode(`EHLO ${smtpConfig.host}\r\n`))
+        const { value } = await tlsReader.read()
+        console.log(`[SMTP] TLS 握手后: ${decoder.decode(value).trim()}`)
+        
+        // 更新 writer 和 reader
+        await writer.close()
+        await reader.cancel()
+        Object.assign(writer, tlsWriter)
+        Object.assign(reader, tlsReader)
+      }
+
+      // AUTH LOGIN
+      await writeCommand('AUTH LOGIN\r\n')
+      await readResponse()
+
+      // 发送用户名 (base64编码)
+      const username = btoa(smtpConfig.user)
+      await writeCommand(`${username}\r\n`)
+      await readResponse()
+
+      // 发送密码 (base64编码)
+      const password = btoa(smtpConfig.pass)
+      await writeCommand(`${password}\r\n`)
+      await readResponse()
+
+      // MAIL FROM
+      await writeCommand(`MAIL FROM:<${smtpConfig.from}>\r\n`)
+      await readResponse()
+
+      // RCPT TO
+      await writeCommand(`RCPT TO:<${smtpConfig.to}>\r\n`)
+      await readResponse()
+
+      // DATA
+      await writeCommand('DATA\r\n')
+      await readResponse()
+
+      // 构建邮件内容
+      const emailContent = [
+        `From: ${smtpConfig.from}`,
+        `To: ${smtpConfig.to}`,
+        `Subject: =?UTF-8?B?${btoa(title)}?=`,
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=UTF-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        btoa(createEmailHTML(title, content)),
+        '\r\n.\r\n'
+      ].join('\r\n')
+
+      await writeCommand(emailContent)
+      await readResponse()
+
+      // QUIT
+      await writeCommand('QUIT\r\n')
+      await readResponse()
+
+      console.log('[SMTP] 邮件发送成功')
+
+    } finally {
+      await writer.close()
+      await reader.cancel()
+      await socket.close()
+    }
     
   } catch (error) {
     console.error('[SMTP] 发送邮件时出错:', error)
