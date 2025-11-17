@@ -30,20 +30,20 @@
 
 ### 1. ServerChan 通知
 ```
-SERVERCHAN_SENDKEY=SCTxxxxxxxxxxxxxxxxxxxx
+SERVERCHAN_SENDKEY=
 ```
 
 ### 2. SMTP 邮件通知
 
 ```
-SMTP_HOST=your-smtp-server.com
-SMTP_PORT=587
+SMTP_HOST=
+SMTP_PORT=
 SMTP_SECURE=false
 SMTP_TLS=true
-SMTP_USER=your-username
-SMTP_PASS=your-password
-EMAIL_FROM=sender@yourdomain.com
-EMAIL_TO=recipient@example.com
+SMTP_USER=
+SMTP_PASS=
+EMAIL_FROM=
+EMAIL_TO=
 ```
 
 ### 3. 钉钉机器人通知
